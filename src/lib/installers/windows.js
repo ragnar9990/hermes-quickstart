@@ -43,24 +43,60 @@ function runWithStdin(cmd, args, stdin, onLog) {
 async function ensureWSL2(onLog) {
   onLog?.('[wsl] Checking WSL2 status...\n');
   const status = await runStreaming('wsl', ['--status'], onLog);
-  if (status.code === 0) {
-    onLog?.('[wsl] WSL2 already installed.\n');
+  const wslFeatureInstalled = status.code === 0;
+
+  // Probe for a working default distro by running a no-op inside it.
+  // This is more reliable than parsing `wsl -l -v` output (UTF-16 LE encoding).
+  let hasDistro = false;
+  if (wslFeatureInstalled) {
+    const probe = await runStreaming('wsl', ['-e', 'true'], () => {});
+    hasDistro = probe.code === 0;
+  }
+
+  if (wslFeatureInstalled && hasDistro) {
+    onLog?.('[wsl] WSL2 + distro ready.\n');
     return { installed: true, rebooted: false };
   }
 
-  onLog?.('[wsl] Installing WSL2 + Ubuntu (admin elevation will prompt; reboot may be required)...\n');
-  const install = await runStreaming('powershell', [
-    '-NoProfile',
-    '-Command',
-    'Start-Process -Verb RunAs -Wait -FilePath wsl.exe -ArgumentList "--install","-d","Ubuntu","--no-launch"',
-  ], onLog);
-
-  if (install.code !== 0) {
-    throw new Error('WSL2 install failed. Run "wsl --install" manually as Administrator and retry.');
+  // Case 1: WSL feature missing entirely — needs admin elevation + reboot
+  if (!wslFeatureInstalled) {
+    onLog?.('[wsl] Installing WSL2 + Ubuntu (admin elevation will prompt; reboot may be required)...\n');
+    const install = await runStreaming('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Start-Process -Verb RunAs -Wait -FilePath wsl.exe -ArgumentList "--install","-d","Ubuntu","--no-launch"',
+    ], onLog);
+    if (install.code !== 0) {
+      throw new Error('WSL2 install failed. Run "wsl --install" manually as Administrator and retry.');
+    }
+    onLog?.('[wsl] Install command completed. Reboot is typically required before WSL is usable.\n');
+    return { installed: true, rebooted: true };
   }
 
-  onLog?.('[wsl] Install command completed. Reboot is typically required before WSL is usable.\n');
-  return { installed: true, rebooted: true };
+  // Case 2: WSL feature installed but no distro — install Ubuntu only (no admin needed)
+  onLog?.('[wsl] WSL2 is installed but no distro found. Installing Ubuntu...\n');
+  const installDistro = await runStreaming('wsl', ['--install', '-d', 'Ubuntu', '--no-launch'], onLog);
+  if (installDistro.code !== 0) {
+    throw new Error('Ubuntu install failed. Try running "wsl --install -d Ubuntu" manually and retry.');
+  }
+  onLog?.('[wsl] Ubuntu installed. Initializing default user (this may take a minute)...\n');
+
+  // First-run init — Ubuntu needs to bootstrap. We run a noninteractive command
+  // via root to skip the interactive username prompt entirely. The installer
+  // creates a "ubuntu" user as default via /etc/wsl.conf.
+  await runStreaming('wsl', ['-d', 'Ubuntu', '--user', 'root', '--', 'bash', '-c',
+    'useradd -m -s /bin/bash hermes 2>/dev/null; printf "[user]\\ndefault=hermes\\n" > /etc/wsl.conf; echo "hermes ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/hermes-nopasswd; chmod 440 /etc/sudoers.d/hermes-nopasswd'
+  ], onLog);
+
+  // Restart so the wsl.conf default-user setting takes effect
+  await runStreaming('wsl', ['--terminate', 'Ubuntu'], () => {});
+  // Verify
+  const verify = await runStreaming('wsl', ['-e', 'whoami'], onLog);
+  if (verify.code !== 0) {
+    throw new Error('Ubuntu installed but failed to launch. Try opening Ubuntu manually once and re-run the installer.');
+  }
+  onLog?.(`[wsl] Default user set up: ${verify.stdout.trim()}\n`);
+  return { installed: true, rebooted: false };
 }
 
 async function installHermesInWSL(onLog, sudoPassword) {

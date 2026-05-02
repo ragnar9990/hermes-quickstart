@@ -56,6 +56,15 @@ app.whenReady().then(() => {
   ipcMain.handle('config:write', (_e, cfg) => configWriter.write(cfg));
   ipcMain.handle('config:preview', (_e, cfg) => configWriter.preview(cfg));
 
+  ipcMain.handle('wsl:install', async (e) => {
+    if (process.platform !== 'win32') return { ok: true, skipped: true };
+    const installer = installers.win32;
+    if (!installer || !installer.ensureWSL2) throw new Error('WSL installer unavailable');
+    return installer.ensureWSL2((chunk) => {
+      e.sender.send('wsl:log', chunk);
+    });
+  });
+
   ipcMain.handle('install:checkDeps', async () => {
     const installer = installers[process.platform];
     if (!installer || !installer.checkDeps) return { missing: [] };

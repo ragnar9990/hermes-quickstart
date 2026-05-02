@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('hermes', {
     preview: (cfg) => ipcRenderer.invoke('config:preview', cfg),
     write: (cfg) => ipcRenderer.invoke('config:write', cfg),
   },
+  wsl: {
+    install: () => ipcRenderer.invoke('wsl:install'),
+    onLog: (cb) => {
+      const handler = (_e, chunk) => cb(chunk);
+      ipcRenderer.on('wsl:log', handler);
+      return () => ipcRenderer.removeListener('wsl:log', handler);
+    },
+  },
   install: {
     checkDeps: () => ipcRenderer.invoke('install:checkDeps'),
     installDeps: (missing, password) => ipcRenderer.invoke('install:installDeps', missing, password),

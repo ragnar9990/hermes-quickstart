@@ -256,4 +256,4 @@ async function run(payload, onLog) {
   return { ok: true, requiresReboot: false };
 }
 
-module.exports = { run, checkDeps, installDeps };
+module.exports = { run, checkDeps, installDeps, ensureWSL2 };
